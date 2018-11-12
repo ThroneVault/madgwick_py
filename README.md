@@ -1,3 +1,7 @@
+# Fork of morgil's implementation of Madgwick filter: 
+# 1. Removed the quaternion class and replaced it with numpy quaternion library
+# 2. MadgwickM.py includes a modified filter where orientation estimate from M&G fields is TRIAD-like - magnetomter only affects yaw 
+
 # madgwick_py: A Python implementation of Madgwick's IMU and AHRS algorithm.
 
 More information on the algorithm can be found at

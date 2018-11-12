@@ -19,30 +19,26 @@
 import warnings
 import numpy as np
 from numpy.linalg import norm
-from .quaternion import Quaternion
+import quaternion
 
 
-class MadgwickAHRS:
-    samplePeriod = 1/256
-    quaternion = Quaternion(1, 0, 0, 0)
-    beta = 1
+class Madgwick:
+    T_DEFAULT = 1/100
+    Q0 = np.quaternion(1, 0, 0, 0)
 
-    def __init__(self, sampleperiod=None, quaternion=None, beta=None):
+    def __init__(self, sampleperiod, beta, quat=Q0):
         """
         Initialize the class with the given parameters.
         :param sampleperiod: The sample period
-        :param quaternion: Initial quaternion
+        :param quaternion: Initial np.quaternion
         :param beta: Algorithm gain beta
         :return:
         """
-        if sampleperiod is not None:
-            self.samplePeriod = sampleperiod
-        if quaternion is not None:
-            self.quaternion = quaternion
-        if beta is not None:
-            self.beta = beta
+        self.samplePeriod = sampleperiod
+        self.quaternion = quat
+        self.beta = beta
 
-    def update(self, gyroscope, accelerometer, magnetometer):
+    def update(self, gyro, accel, mag):
         """
         Perform one update step with data from a AHRS sensor array
         :param gyroscope: A three-element array containing the gyroscope data in radians per second.
@@ -50,26 +46,38 @@ class MadgwickAHRS:
         :param magnetometer: A three-element array containing the magnetometer data. Can be any unit since a normalized value is used.
         :return:
         """
-        q = self.quaternion
+        qnp = self.quaternion
+        q = quaternion.as_float_array(self.quaternion)
 
-        gyroscope = np.array(gyroscope, dtype=float).flatten()
-        accelerometer = np.array(accelerometer, dtype=float).flatten()
-        magnetometer = np.array(magnetometer, dtype=float).flatten()
+        gyroscope = gyro.flatten()
+        accelerometer = accel.flatten()
+        magnetometer = mag.flatten()
+
+        if norm(magnetometer)>200.:
+            raise ValueError("magnetometer value a bit off")
+        if norm(accelerometer)>30.:
+            raise ValueError("accelerometer value a bit off")
 
         # Normalise accelerometer measurement
-        if norm(accelerometer) is 0:
+        if norm(accelerometer) is 0 or norm(accelerometer) is np.nan:
             warnings.warn("accelerometer is zero")
             return
         accelerometer /= norm(accelerometer)
 
         # Normalise magnetometer measurement
-        if norm(magnetometer) is 0:
+        if norm(magnetometer) is 0 or norm(magnetometer) is np.nan:
             warnings.warn("magnetometer is zero")
             return
         magnetometer /= norm(magnetometer)
-
-        h = q * (Quaternion(0, magnetometer[0], magnetometer[1], magnetometer[2]) * q.conj())
-        b = np.array([0, norm(h[1:3]), 0, h[3]])
+        # magnetometer reading in Earth's frame quaternion
+        # Sources of interference fixed in the sensor frame,
+        # termed hard iron biases, can be removed through calibration
+        h = qnp * np.quaternion(0, *magnetometer) * qnp.conj()
+        # the following is based on assumption that magnetic field is in the direction of the north
+        # (no East/West component), but does have a vertical component (inclination). This is not to
+        # manipulate the measurement, but to obtain the inclination of the field as the reference.
+        # See section III.D
+        b = np.array([0, norm(h.imag[0:2]), 0, h.z])
 
         # Gradient descent algorithm corrective step
         f = np.array([
@@ -92,11 +100,11 @@ class MadgwickAHRS:
         step /= norm(step)  # normalise step magnitude
 
         # Compute rate of change of quaternion
-        qdot = (q * Quaternion(0, gyroscope[0], gyroscope[1], gyroscope[2])) * 0.5 - self.beta * step.T
+        qdot = (qnp * np.quaternion(0, *gyroscope)) * 0.5 - np.quaternion(*(self.beta * step))
 
         # Integrate to yield quaternion
-        q += qdot * self.samplePeriod
-        self.quaternion = Quaternion(q / norm(q))  # normalise quaternion
+        qnp += qdot * self.samplePeriod
+        self.quaternion = qnp.normalized()  # normalise quaternion
 
     def update_imu(self, gyroscope, accelerometer):
         """
@@ -130,8 +138,11 @@ class MadgwickAHRS:
         step /= norm(step)  # normalise step magnitude
 
         # Compute rate of change of quaternion
-        qdot = (q * Quaternion(0, gyroscope[0], gyroscope[1], gyroscope[2])) * 0.5 - self.beta * step.T
+        qdot = (q * np.quaternion(0, *gyroscope)) * 0.5 - self.BETA0 * step.T
 
         # Integrate to yield quaternion
         q += qdot * self.samplePeriod
-        self.quaternion = Quaternion(q / norm(q))  # normalise quaternion
+        self.quaternion = q.normalised()  # normalise quaternion
+        
+    def getQuatnp(self):
+        return self.quaternion.copy()
